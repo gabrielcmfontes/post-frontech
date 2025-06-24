@@ -60,6 +60,9 @@ def baixar_anexos_periodo(data_inicio, data_fim):
         inicio_dia = data_inicio.replace(hour=0, minute=0, second=0).strftime('%Y-%m-%d %H:%M')
         fim_dia = data_fim.replace(hour=23, minute=59, second=59).strftime('%Y-%m-%d %H:%M')
         filtro = f"[ReceivedTime] >= '{inicio_dia}' AND [ReceivedTime] <= '{fim_dia}'"
+        print(f"Data interpretada início: {data_inicio}")
+        print(f"Data interpretada fim: {data_fim}")
+        print(f"Filtro usado: {filtro}")
         print(f"Procurando por e-mails recebidos entre {data_inicio.strftime('%d/%m/%Y')} e {data_fim.strftime('%d/%m/%Y')}...")
         mensagens_filtradas = messages.Restrict(filtro)
 
@@ -119,13 +122,6 @@ def ler_abastecimentos_de_arquivo(xml_path):
         else:
             kilometers = None
 
-        icms_tot_node = root.find('.//ns:total/ns:ICMSTot', namespaces=ns)
-        vNF_node = icms_tot_node.find('./ns:vNF', namespaces=ns) if icms_tot_node is not None else None
-        try:
-            total_cost = float(vNF_node.text) if vNF_node is not None and vNF_node.text is not None else None
-        except ValueError:
-            total_cost = None
-
         dados_json_list = []
         for det in root.findall('.//ns:det', namespaces=ns):
             prod_node = det.find('./ns:prod', namespaces=ns)
@@ -141,6 +137,11 @@ def ler_abastecimentos_de_arquivo(xml_path):
                 unit_cost = float(vUnCom_node.text) if vUnCom_node is not None and vUnCom_node.text is not None else None
             except ValueError:
                 unit_cost = None
+            vProd_node = prod_node.find('./ns:vProd', namespaces=ns) if prod_node is not None else None
+            try:
+                total_cost = float(vProd_node.text) if vProd_node is not None and vProd_node.text is not None else None
+            except ValueError:
+                total_cost = None
 
             json_output = {
                 "invoiceId": invoice_id, "issuer": issuer, "invoiceDate": invoice_date, "date": invoice_date,
@@ -178,7 +179,7 @@ def ler_todos_os_abastecimentos(diretorio_xml):
 # --- FUNÇÃO DE POST CORRIGIDA PARA ENVIAR UM ITEM DE CADA VEZ ---
 def postAbastecimentos(lista_de_abastecimentos):
     """
-    Envia cada abastecimento da lista para a URL, um de cada vez.
+    Envia cada abastecimento da lista para a URL, um de cada vez, mostrando detalhes da requisição e resposta para debug.
     """
     url = "http://192.168.11.95:3012/fuel"
     headers = { "Content-Type": "application/json" }
@@ -186,41 +187,40 @@ def postAbastecimentos(lista_de_abastecimentos):
 
     print("\nIniciando o post dos abastecimentos, um por um...")
     
-    # Percorre a lista de abastecimentos
     for abastecimento_individual in lista_de_abastecimentos:
         invoice_id = int(abastecimento_individual.get("invoiceId", "ID Desconhecido"))
         print(f"  - Enviando abastecimento ID: {invoice_id}...")
-        
+        print(f"    Corpo enviado: {json.dumps(abastecimento_individual, ensure_ascii=False)}")
         try:
-            # Envia o DICIONÁRIO INDIVIDUAL como o corpo da requisição
             response = requests.post(url, headers=headers, json=abastecimento_individual, timeout=10)
-            
-            # Checa se a requisição teve erro (ex: 400, 500) e levanta uma exceção se sim
+            print(f"    Resposta bruta: {response.status_code} {response.reason}")
+            print(f"    Conteúdo da resposta: {response.text}")
             response.raise_for_status() 
-            
             print(f"    - Sucesso! Status: {response.status_code}")
             respostas_servidor.append(response.json())
-
         except requests.exceptions.HTTPError as http_err:
-            # Erros específicos do servidor (como o que você recebeu)
             print(f"    - ERRO HTTP do servidor ao enviar ID {invoice_id}: {http_err}")
-            print(f"      Resposta do servidor: {response.text}") # Mostra a mensagem de erro completa
+            print(f"      Resposta do servidor: {response.text}")
             respostas_servidor.append({'error_id': invoice_id, 'details': response.text})
         except requests.exceptions.RequestException as e:
-            # Erros de conexão, timeout, etc.
             print(f"    - ERRO DE CONEXÃO ao enviar ID {invoice_id}: {e}")
             respostas_servidor.append({'error_id': invoice_id, 'details': str(e)})
 
     return respostas_servidor
     
-if __name__ == "__main__":
-    limpar_pasta_xml(DOWNLOAD_FOLDER)
+def main(data_str):
+    """
+    Função principal para processar os abastecimentos de um único dia.
+    Recebe a data como string no formato 'DD/MM/YYYY'.
+    """
+    try:
+        data = datetime.strptime(data_str, "%d/%m/%Y")
+    except ValueError:
+        print(f"Data inválida: {data_str}. Use o formato DD/MM/YYYY.")
+        return
 
-    # Defina o período desejado
-    from datetime import datetime
-    data_inicio = datetime.strptime("21/05/2024", "%d/%m/%Y")
-    data_fim = datetime.strptime("22/06/2024", "%d/%m/%Y")
-    baixar_anexos_periodo(data_inicio, data_fim)
+    limpar_pasta_xml(DOWNLOAD_FOLDER)
+    baixar_anexos_periodo(data, data)  # Apenas um dia
 
     print("\nIniciando a leitura dos arquivos XML baixados...")
     dados_json_list = ler_todos_os_abastecimentos(DOWNLOAD_FOLDER)
@@ -229,3 +229,10 @@ if __name__ == "__main__":
     postAbastecimentos(dados_json_list)
 
     print("\n--- Processo Concluído ---")
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("Uso: python ReadXML.py DD/MM/YYYY")
+    else:
+        main(sys.argv[1])
